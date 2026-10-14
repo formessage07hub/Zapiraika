@@ -52,38 +52,50 @@ class ZapiraykaGame:
         if not has_any_move:
             # Если ходить некуда, побеждает тот, кто ходил ПРЕДЫДУЩИМ (оппонент)
             self.winner = opponent_color
-
     def make_move(self, color, fig_index, to_row, to_col):
         if self.winner or self.turn != color:
             return False, "Не ваш ход"
 
         from_row, from_col = self.board[color][fig_index]
-        opp_row, opp_col = self.board["black" if color == "white" else "white"][fig_index]
+        
+        # Находим фигуру соперника в ЭТОМ ЖЕ вертикальном столбце
+        opp_color = "black" if color == "white" else "white"
+        opp_pieces = self.board[opp_color]
+        opp_row = None
+        for r, c in opp_pieces:
+            if c == to_col:
+                opp_row = r
+                break
 
-        # Правило 1: Движение только в своём вертикальном столбце
+        # Правило 1: Движение возможно ТОЛЬКО в своём вертикальном столбце
         if from_col != to_col:
             return False, "Движение возможно только по вертикали вперёд"
 
-        # Правило 2: Направление движения
+        # Правило 2: Клетка не должна быть занята фигурой соперника
+        if to_row == opp_row:
+            return False, "Клетка занята соперником"
+
+        # Правило 3: Направление движения и запрет перепрыгивания
         if color == "white":
             if to_row <= from_row:
                 return False, "Белые могут ходить только вперёд (вниз)"
-            if to_row >= opp_row:
-                return False, "Нельзя перепрыгивать или вставать на фигуру соперника"
+            if opp_row is not None and to_row > opp_row:
+                return False, "Нельзя перепрыгивать через фигуру соперника"
         else:
             if to_row >= from_row:
                 return False, "Чёрные могут ходить только вперёд (вверх)"
-            if to_row <= opp_row:
-                return False, "Нельзя перепрыгивать или вставать на фигуру соперника"
+            if opp_row is not None and to_row < opp_row:
+                return False, "Нельзя перепрыгивать через фигуру соперника"
 
-        # Если проверки пройдены — делаем ход
+        # Если все проверки пройдены — обновляем координату строки для этой фигуры
         self.board[color][fig_index] = [to_row, to_col]
         
-        # Меняем очередь хода и проверяем на финал игры
+        # Меняем очередь хода и проверяем, не заперт ли следующий игрок
         self.turn = "black" if color == "white" else "white"
         self.check_game_over()
         return True, "Успешно"
 
+    
     def reset(self):
         self.__init__()
 
