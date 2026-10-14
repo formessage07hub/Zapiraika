@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Игра «Запирайка» — Тактический Терминал</title>
+    <style>
+        body {
+            background-color: #121212; color: #00ff66;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0; padding: 20px; display: flex; flex-direction: column;
+            align-items: center; height: 100vh; box-sizing: border-box;
+        }
+        h1, h2 { text-transform: uppercase; letter-spacing: 2px; text-shadow: 0 0 5px #00ff66; margin: 5px; }
+        h1 { font-size: 22px; } h2 { font-size: 14px; color: #ffffff; }
+        #game-container { display: flex; gap: 20px; width: 100%; max-width: 900px; flex-grow: 1; overflow: hidden; margin-top: 15px; }
+        #board-wrapper { display: flex; flex-direction: column; align-items: center; background: #1a1a1a; padding: 20px; border: 2px solid #00ff66; }
+        #board { display: grid; grid-template-columns: repeat(3, 60px); grid-template-rows: repeat(8, 60px); gap: 4px; background-color: #333; padding: 4px; }
+        .cell { background-color: #222; display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; user-select: none; border: 1px solid #444; }
+        .cell:hover { background-color: #2a2a2a; }
+        .cell.selected { border: 2px solid #00bcff; background-color: #113344; }
+        .checker { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-sizing: border-box; }
+        .checker.white { background-color: #ffffff; border: 3px solid #cccccc; box-shadow: 0 0 8px #fff; }
+        .checker.black { background-color: #000000; border: 3px solid #333333; box-shadow: 0 0 8px #000; }
+        #chat-wrapper { flex-grow: 1; border: 2px solid #00ff66; background-color: #1a1a1a; display: flex; flex-direction: column; }
+        #messages { flex-grow: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+        .msg { word-break: break-word; } .msg.sys { color: #888; font-style: italic; }
+        #input-area { display: flex; border-top: 2px solid #00ff66; }
+        #msg-input { flex-grow: 1; background: transparent; border: none; color: #00ff66; padding: 12px; font-family: inherit; outline: none; }
+        #send-btn, .btn { background-color: #00ff66; color: #121212; border: none; padding: 0 15px; font-family: inherit; font-weight: bold; cursor: pointer; text-transform: uppercase; }
+        #send-btn:hover, .btn:hover { background-color: #00cc52; }
+        .btn { padding: 8px 15px; margin-top: 10px; }
+        .btn.reset { background: transparent; border: 1px solid #ff3333; color: #ff3333; }
+        .btn.reset:hover { background: #ff3333; color: #fff; }
+        #labels-top { display: grid; grid-template-columns: repeat(3, 60px); gap: 4px; text-align: center; font-weight: bold; margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+
+    <h1>[ ТЕРМИНАЛ: ИГРА ЗАПИРАЙКА ]</h1>
+    <h2 id="role-indicator">Ваша роль: Загрузка...</h2>
+
+    <div id="game-container">
+        <div id="board-wrapper">
+            <div id="labels-top"><div>A</div><div>B</div><div>C</div></div>
+            <div id="board"></div>
+            <div id="status-line" style="margin-top: 15px; font-weight: bold;">Очередь: Белые</div>
+            <button class="btn reset" id="reset-btn">Сбросить матч</button>
+        </div>
+
+        <div id="chat-wrapper">
+            <div id="messages"></div>
+            <div id="input-area">
+                <input type="text" id="msg-input" placeholder="Введите сообщение в чат..." autocomplete="off">
+                <button id="send-btn">Отправить</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Роль подменяется бэкендом динамически при запросе URL: 'white', 'black' или 'spectator'
+        let userRole = 'spectator'; 
+        
+        const roleNames = { "white": "Игрок БЕЛЫМИ ⚪", "black": "Игрок ЧЁРНЫМИ ⚫", "spectator": "ЗРИТЕЛЬ 👁‍🗨" };
+        document.getElementById("role-indicator").innerText = `Ваша роль: ${roleNames[userRole]}`;
+
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
+
+        let gameState = null;
+        let selectedPieceIndex = null;
+
+        // Генерация сетки поля 3x8
+        const boardEl = document.getElementById("board");
+        function createVisualBoard() {
+            boardEl.innerHTML = "";
+            // Отрисовка строк от 1 до 8 (в терминале строки 0-7)
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 3; c++) {
+                    const cell = document.createElement("div");
+                    cell.className = "cell";
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    cell.addEventListener("click", () => handleCellClick(r, c));
+                    boardEl.appendChild(cell);
+                }
+            }
+        }
+        createVisualBoard();
+
+        function drawState() {
+            if (!gameState) return;
+
+            // Очищаем все клетки от старых фигур и классов
+            document.querySelectorAll(".cell").forEach(cell => {
+                cell.innerHTML = "";
+                cell.classList.remove("selected");
+            });
+
+            // Рисуем белые фигуры
+            gameState.board.white.forEach((pos, idx) => {
+                const cell = document.querySelector(`[data-row="${pos[0]}"][data-col="${pos[1]}"]`);
+                if (cell) {
+                    cell.innerHTML = `<div class="checker white">${idx + 1}</div>`;
+                    if (userRole === 'white' && selectedPieceIndex === idx) cell.classList.add("selected");
+                }
+            });
+
+            // Рисуем чёрные фигуры
+            gameState.board.black.forEach((pos, idx) => {
+                const cell = document.querySelector(`[data-row="${pos[0]}"][data-col="${pos[1]}"]`);
+                if (cell) {
+                    cell.innerHTML = `<div class="checker black">${idx + 1}</div>`;
+                    if (userRole === 'black' && selectedPieceIndex === idx) cell.classList.add("selected");
+                }
+            });
+
+            // Обновляем строку статуса
+            const statusEl = document.getElementById("status-line");
+            if (gameState.winner) {
+                statusEl.innerHTML = `ПОБЕДА: ${gameState.winner === 'white' ? 'БЕЛЫЕ ⚪' : 'ЧЁРНЫЕ ⚫'}!`;
+                statusEl.style.color = "#ff3333";
+            } else {
+                statusEl.innerHTML = `Ходят: ${gameState.turn === 'white' ? 'Белые ⚪' : 'Чёрные ⚫'}`;
+                statusEl.style.color = "#00ff66";
+            }
+        }
+
+        function handleCellClick(r, c) {
+            if (userRole === 'spectator' || gameState.winner || gameState.turn !== userRole) return;
+
+            // Проверяем, кликнули ли мы по своей фигуре, чтобы выбрать её
+            const myPieces = gameState.board[userRole];
+            let clickedPieceIdx = myPieces.findIndex(pos => pos[0] === r && pos[1] === c);
+
+            if (clickedPieceIdx !== -1) {
+                selectedPieceIndex = clickedPieceIdx;
+                drawState();
+            } else if (selectedPieceIndex !== null) {
+                // Если фигура выбрана и кликнули по пустой клетке — шлем ход на сервер
+                socket.send(JSON.stringify({
+                    type: "move",
+                    color: userRole,
+                    fig_index: selectedPieceIndex,
+                    to_row: r,
+                    to_col: c
+                }));
+                selectedPieceIndex = null;
+            }
+        }
+
+        socket.onmessage = function(event) {
+            const msg = JSON.parse(event.data);
+            if (msg.type === "state") {
+                gameState = msg.data;
+                // Заполняем чат при первом входе
+                if (document.getElementById("messages").children.length === 0) {
+                    gameState.chat.forEach(appendChatMessage);
+                }
+                drawState();
+            } else if (msg.type === "chat") {
+                appendChatMessage(msg.data);
+            }
+        };
+
+        function appendChatMessage(chatMsg) {
+            const msgEl = document.createElement("div");
+            msgEl.className = "msg";
+            msgEl.innerHTML = `<span style="color:#00ff66; font-weight:bold;">${chatMsg.sender}:</span> ${chatMsg.text}`;
+            const container = document.getElementById("messages");
+            container.appendChild(msgEl);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Чат
+        const msgInput = document.getElementById("msg-input");
+        function sendChat() {
+            const text = msgInput.value.trim();
+            if (text) {
+                let name = userRole === 'white' ? "Белые" : userRole === 'black' ? "Чёрные" : "Зритель";
+                socket.send(JSON.stringify({ type: "message", sender: name, text: text }));
+                msgInput.value = "";
+            }
+        }
+        document.getElementById("send-btn").addEventListener("click", sendChat);
+        msgInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+        // Сброс
+        document.getElementById("reset-btn").addEventListener("click", () => {
+            if (confirm("Перезапустить матч и сбросить фигуры?")) {
+                socket.send(JSON.stringify({ type: "reset" }));
+            }
+        });
+    </script>
+</body>
+</html>
